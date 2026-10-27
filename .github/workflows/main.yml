@@ -1,0 +1,64 @@
+name: Build SampleCore
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libfreetype-dev libfontconfig1-dev \
+            libx11-dev libxcomposite-dev libxcursor-dev libxext-dev libxinerama-dev \
+            libxrandr-dev libxrender-dev libgl1-mesa-dev
+
+      - name: Siapkan ASIO SDK (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if (Test-Path "third_party/asiosdk/common/iasiodrv.h") {
+            Write-Host "Memakai ASIO SDK dari third_party/asiosdk"
+            exit 0
+          }
+          $urls = @(
+            "https://download.steinberg.net/sdk_downloads/asiosdk_2.3.3_2019-06-14.zip",
+            "https://www.steinberg.net/asiosdk"
+          )
+          $root = $null
+          foreach ($u in $urls) {
+            try {
+              Remove-Item asiosdk.zip, asiosdk_tmp -Recurse -Force -ErrorAction SilentlyContinue
+              Invoke-WebRequest -Uri $u -OutFile asiosdk.zip -UseBasicParsing -MaximumRedirection 10
+              Expand-Archive asiosdk.zip -DestinationPath asiosdk_tmp -Force
+              $h = Get-ChildItem asiosdk_tmp -Recurse -Filter iasiodrv.h | Select-Object -First 1
+              if ($h) { $root = $h.Directory.Parent.FullName; break }
+            } catch { Write-Host "Gagal mengunduh dari $u : $_" }
+          }
+          if (-not $root) {
+            throw "ASIO SDK gagal diunduh. Unduh manual dari steinberg.net/asiosdk lalu taruh di third_party/asiosdk (harus ada common/iasiodrv.h)."
+          }
+          Write-Host "ASIO SDK: $root"
+          "ASIO_SDK_DIR=$root" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: SampleCore-${{ runner.os }}
+          path: build/SampleCore_artefacts/Release/
